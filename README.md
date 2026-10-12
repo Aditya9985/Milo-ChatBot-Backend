@@ -8,14 +8,16 @@ history on the user's device.
 
 1. Create a **Blueprint** in Render and select this repository. Render reads
    `render.yaml` to create the web service.
-2. In the service's **Environment** settings, add `OPENAI_API_KEY` as a secret.
+2. The `.python-version` file pins the service to Python 3.12.10, which is
+   compatible with the pinned Pydantic dependencies.
+3. In the service's **Environment** settings, add `OPENAI_API_KEY` as a secret.
    Never put the key in this repository or in frontend code.
-3. Set `CORS_ORIGINS` to the exact deployed web frontend origin(s), separated
+4. Set `CORS_ORIGINS` to the exact deployed web frontend origin(s), separated
    by commas, for example `https://your-app.example.com`. Keep `*` only for
    development or if any browser origin is intentionally allowed. Native
    mobile clients do not use browser CORS.
-4. Deploy, then check `https://<your-service>.onrender.com/health`.
-5. Set that HTTPS base URL in Milo's frontend **Settings**.
+5. Deploy, then check `https://<your-service>.onrender.com/health`.
+6. Set that HTTPS base URL in Milo's frontend **Settings**.
 
 Render injects the listening port through `PORT`; the service binds to
 `0.0.0.0` and exposes `/health` as its health check.
