@@ -1,7 +1,8 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 import main
@@ -10,6 +11,12 @@ import main
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(main.app)
+        main.app.dependency_overrides[main.require_firebase_user] = lambda: {
+            "sub": "user_test"
+        }
+
+    def tearDown(self) -> None:
+        main.app.dependency_overrides.clear()
 
     def test_health_check(self) -> None:
         response = self.client.get("/health")
@@ -46,6 +53,80 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(empty_response.status_code, 422)
         self.assertEqual(long_response.status_code, 422)
 
+    def test_chat_requires_authentication(self) -> None:
+        main.app.dependency_overrides.clear()
+
+        response = self.client.post("/chat", json={"message": "Hello"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["www-authenticate"], "Bearer")
+
+    def test_authenticated_request_requires_firebase_project_configuration(self) -> None:
+        main.app.dependency_overrides.clear()
+        with patch.object(main, "FIREBASE_PROJECT_ID", ""):
+            response = self.client.post(
+                "/chat",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+
+    def test_firebase_id_token_verification_checks_issuer_audience_and_signature(
+        self,
+    ) -> None:
+        signing_key = SimpleNamespace(key="public-key")
+        jwks_client = SimpleNamespace(
+            get_signing_key_from_jwt=Mock(return_value=signing_key)
+        )
+        project_id = "milo-test-project"
+        issuer = f"https://securetoken.google.com/{project_id}"
+        with (
+            patch.object(main, "FIREBASE_PROJECT_ID", project_id),
+            patch.object(main, "FIREBASE_ISSUER", issuer),
+            patch.object(main, "FIREBASE_JWKS_CLIENT", jwks_client),
+            patch.object(
+                main.jwt, "decode", return_value={"sub": "user_123"}
+            ) as decode,
+        ):
+            claims = main.require_firebase_user(
+                HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+            )
+
+        self.assertEqual(claims["sub"], "user_123")
+        decode.assert_called_once_with(
+            "token",
+            "public-key",
+            algorithms=["RS256"],
+            audience=project_id,
+            issuer=issuer,
+            options={"require": ["exp", "iat", "auth_time", "iss", "sub"]},
+        )
+
+    def test_invalid_firebase_id_token_is_rejected(self) -> None:
+        project_id = "milo-test-project"
+        jwks_client = SimpleNamespace(
+            get_signing_key_from_jwt=Mock(
+                return_value=SimpleNamespace(key="public-key")
+            )
+        )
+        with (
+            patch.object(main, "FIREBASE_PROJECT_ID", project_id),
+            patch.object(
+                main, "FIREBASE_ISSUER", f"https://securetoken.google.com/{project_id}"
+            ),
+            patch.object(main, "FIREBASE_JWKS_CLIENT", jwks_client),
+            patch.object(main.jwt, "decode", side_effect=main.InvalidTokenError),
+        ):
+            with self.assertRaises(main.HTTPException) as error:
+                main.require_firebase_user(
+                    HTTPAuthorizationCredentials(
+                        scheme="Bearer", credentials="invalid-token"
+                    )
+                )
+
+        self.assertEqual(error.exception.status_code, 401)
+
     def test_tts_returns_audio(self) -> None:
         speech = SimpleNamespace(content=b"audio data")
         with patch.object(
@@ -57,6 +138,24 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "audio/mpeg")
         self.assertEqual(response.content, b"audio data")
         create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["model"], "gpt-4o-mini-tts")
+        self.assertEqual(create.call_args.kwargs["voice"], "ash")
+        self.assertIn("original youthful male", create.call_args.kwargs["instructions"])
+
+    def test_tts_rejects_unsupported_voice(self) -> None:
+        response = self.client.post(
+            "/tts",
+            json={"text": "Hello", "voice": "unlisted-voice"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_tts_requires_authentication(self) -> None:
+        main.app.dependency_overrides.clear()
+
+        response = self.client.post("/tts", json={"text": "Hello"})
+
+        self.assertEqual(response.status_code, 401)
 
 
 if __name__ == "__main__":

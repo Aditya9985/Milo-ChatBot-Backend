@@ -11,5 +11,7 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-5.4-nano
+      - key: FIREBASE_PROJECT_ID
+        value: milo-2107d
       - key: CORS_ORIGINS
         value: "*"
