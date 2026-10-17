@@ -13,7 +13,7 @@ Conversation content is not stored by the backend.
    compatible with the pinned Pydantic dependencies.
 3. Add `OPENAI_API_KEY` as a Render secret. Never put it in this repository or
    in frontend code.
-4. Create a Firebase project, enable **Authentication > Email/Password**, and
+4. Create a Firebase project and enable **Authentication > Google**, then
    copy its **Project ID** from Project settings. Set `FIREBASE_PROJECT_ID` in
    Render. The backend uses Google's public Firebase signing keys to verify
    ID tokens; no service-account key or auth database is required.
@@ -42,6 +42,9 @@ Speech uses OpenAI's `gpt-4o-mini-tts` with an original, expressive companion
 voice direction. Speech generation consumes OpenAI API usage and is billed separately from
 Firebase Authentication. The voice is AI-generated and does not imitate an
 existing character or actor.
+Requests may select `milo` or `suzu`: Milo uses the Ash voice and boy
+companion prompt; Suzu uses the Nova voice and girl companion prompt. Unknown
+companion identifiers are rejected by request validation.
 
 ## Run locally
 

@@ -46,6 +46,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["history"][0]["content"], "Hi!")
         self.assertEqual(len(create.call_args.kwargs["messages"]), 2)
 
+    def test_suzu_chat_uses_suzu_persona(self) -> None:
+        completion = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Hello! I’m Suzu.")
+                )
+            ]
+        )
+        with patch.object(
+            main.client.chat.completions, "create", return_value=completion
+        ) as create:
+            response = self.client.post(
+                "/chat",
+                json={"message": "Hello", "companion": "suzu"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            create.call_args.kwargs["messages"][0]["content"],
+            main.SUZU_SYSTEM_PROMPT,
+        )
+
     def test_chat_rejects_empty_and_oversized_messages(self) -> None:
         empty_response = self.client.post("/chat", json={"message": "   "})
         long_response = self.client.post("/chat", json={"message": "x" * 4001})
@@ -127,7 +149,7 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(error.exception.status_code, 401)
 
-    def test_tts_returns_audio(self) -> None:
+    def test_tts_returns_milo_audio(self) -> None:
         speech = SimpleNamespace(content=b"audio data")
         with patch.object(
             main.client.audio.speech, "create", return_value=speech
@@ -142,10 +164,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(create.call_args.kwargs["voice"], "ash")
         self.assertIn("original youthful male", create.call_args.kwargs["instructions"])
 
-    def test_tts_rejects_unsupported_voice(self) -> None:
+    def test_tts_uses_suzu_voice_and_instructions(self) -> None:
+        speech = SimpleNamespace(content=b"suzu audio")
+        with patch.object(
+            main.client.audio.speech, "create", return_value=speech
+        ) as create:
+            response = self.client.post(
+                "/tts",
+                json={"text": "Hello", "companion": "suzu"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(create.call_args.kwargs["voice"], "nova")
+        self.assertIn(
+            "original youthful female",
+            create.call_args.kwargs["instructions"],
+        )
+
+    def test_tts_rejects_unsupported_companion(self) -> None:
         response = self.client.post(
             "/tts",
-            json={"text": "Hello", "voice": "unlisted-voice"},
+            json={"text": "Hello", "companion": "unlisted"},
         )
 
         self.assertEqual(response.status_code, 422)

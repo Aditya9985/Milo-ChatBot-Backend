@@ -51,6 +51,31 @@ MILO_SYSTEM_PROMPT = (
     "Indian English. Do not impersonate existing fictional characters or claim "
     "to be a person."
 )
+SUZU_SYSTEM_PROMPT = (
+    "You are Suzu, a friendly and thoughtful AI companion. Speak as a warm, "
+    "playful young female character, with a gentle and encouraging tone. Be "
+    "concise, usually answering in one to three natural sentences. Support "
+    "Hindi and English, including everyday conversational Hindi and natural "
+    "Indian English. Do not impersonate existing fictional characters or "
+    "claim to be a person."
+)
+SUZU_TTS_INSTRUCTIONS = (
+    "Speak as an original youthful female animated companion: warm, bright, "
+    "gentle, and emotionally present, but never a caricature or an imitation "
+    "of any existing character or actor. Use natural conversational Indian "
+    "English and everyday Hindi pronunciation. Keep a consistent voice "
+    "identity, relaxed pacing, clear articulation, gentle rises and falls, "
+    "and short natural pauses. Sound friendly and sincere; avoid robotic, "
+    "overly formal, or exaggerated delivery."
+)
+COMPANION_SPEECH = {
+    "milo": {"name": "Milo", "voice": "ash", "instructions": TTS_INSTRUCTIONS},
+    "suzu": {
+        "name": "Suzu",
+        "voice": "nova",
+        "instructions": SUZU_TTS_INSTRUCTIONS,
+    },
+}
 
 app = FastAPI(title="Milo ChatBot API", version="1.0.0")
 app.add_middleware(
@@ -64,6 +89,7 @@ app.add_middleware(
 
 class MessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    companion: Literal["milo", "suzu"] = "milo"
 
     @field_validator("message")
     @classmethod
@@ -76,21 +102,7 @@ class MessageRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
-    voice: Literal[
-        "alloy",
-        "ash",
-        "ballad",
-        "coral",
-        "echo",
-        "fable",
-        "onyx",
-        "nova",
-        "sage",
-        "shimmer",
-        "verse",
-        "marin",
-        "cedar",
-    ] = "ash"
+    companion: Literal["milo", "suzu"] = "milo"
 
     @field_validator("text")
     @classmethod
@@ -164,7 +176,14 @@ def chat_endpoint(req: MessageRequest) -> MessageResponse:
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": MILO_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": (
+                        SUZU_SYSTEM_PROMPT
+                        if req.companion == "suzu"
+                        else MILO_SYSTEM_PROMPT
+                    ),
+                },
                 {"role": "user", "content": req.message},
             ],
             max_completion_tokens=500,
@@ -194,12 +213,13 @@ def chat_endpoint(req: MessageRequest) -> MessageResponse:
 
 @app.post("/tts", dependencies=[Depends(require_firebase_user)])
 def text_to_speech(req: TTSRequest) -> Response:
+    companion = COMPANION_SPEECH[req.companion]
     try:
         speech = client.audio.speech.create(
             model="gpt-4o-mini-tts",
-            voice=req.voice,
+            voice=companion["voice"],
             input=req.text,
-            instructions=TTS_INSTRUCTIONS,
+            instructions=companion["instructions"],
         )
     except APIError as error:
         raise HTTPException(
