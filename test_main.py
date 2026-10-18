@@ -122,6 +122,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["history"][0]["content"], "Hi!")
         self.assertEqual(len(create.call_args.kwargs["messages"]), 2)
         self.assertEqual(create.call_args.kwargs["max_completion_tokens"], 500)
+        self.assertEqual(
+            set(response.json()),
+            {"response", "history"},
+        )
 
     def test_chat_includes_valid_history_between_system_and_current_message(self) -> None:
         completion = SimpleNamespace(
@@ -225,10 +229,134 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            "one brief sentence of at most 18 words",
+            "no more than 18 words",
             create.call_args.kwargs["messages"][0]["content"],
         )
         self.assertEqual(create.call_args.kwargs["max_completion_tokens"], 120)
+
+    def test_voice_mode_strips_markdown_emojis_and_urls(self) -> None:
+        messy_reply = (
+            "**Hello there!** 😊 Visit https://example.com now. "
+            "This later sentence has enough extra words to exceed the maximum "
+            "allowed spoken response length and must be removed."
+        )
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=messy_reply))]
+        )
+        with patch.object(
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ):
+            response = self.client.post(
+                "/chat",
+                json={"message": "Hello", "voice_mode": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["response"], "Hello there! Visit now.")
+        self.assertNotIn("😊", response.json()["response"])
+        self.assertNotIn("https://", response.json()["response"])
+
+    def test_voice_text_trims_at_sentence_boundary_within_word_limit(self) -> None:
+        first_sentence = "One two three four five six seven eight nine ten."
+        second_sentence = (
+            "Eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen "
+            "nineteen twenty twentyone twentytwo."
+        )
+        text = f"{first_sentence} {second_sentence} More words after that."
+
+        cleaned = main.clean_voice_text(text)
+
+        self.assertEqual(cleaned, first_sentence)
+        self.assertLessEqual(len(cleaned.split()), 18)
+
+    def test_voice_text_hard_limits_a_sentence_longer_than_word_limit(self) -> None:
+        text = " ".join(f"word{index}" for index in range(22))
+
+        cleaned = main.clean_voice_text(text)
+
+        self.assertEqual(len(cleaned.split()), 18)
+        self.assertTrue(cleaned.endswith("."))
+
+    def test_voice_text_removes_markdown_links_headings_and_lists(self) -> None:
+        text = "# **Title**\n- [Open site](https://example.com)\n"
+
+        self.assertEqual(main.clean_voice_text(text), "Title Open site")
+
+    def test_structured_chat_returns_parsed_fields(self) -> None:
+        completion = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"text":"नमस्ते, मैं खुश हूँ।","lang":"hi",'
+                        '"emotion":"happy"}'
+                    )
+                )
+            ]
+        )
+        with patch.object(
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ) as create:
+            response = self.client.post(
+                "/chat",
+                json={"message": "नमस्ते", "structured": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "response": "नमस्ते, मैं खुश हूँ।",
+                "text": "नमस्ते, मैं खुश हूँ।",
+                "lang": "hi",
+                "emotion": "happy",
+                "history": response.json()["history"],
+            },
+        )
+        self.assertEqual(
+            create.call_args.kwargs["response_format"],
+            {"type": "json_object"},
+        )
+
+    def test_structured_chat_falls_back_for_invalid_json(self) -> None:
+        completion = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="मैं तुम्हारी मदद करूँगा।")
+                )
+            ]
+        )
+        with patch.object(
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ):
+            response = self.client.post(
+                "/chat",
+                json={"message": "मदद करो", "structured": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["response"], "मैं तुम्हारी मदद करूँगा।")
+        self.assertEqual(response.json()["text"], "मैं तुम्हारी मदद करूँगा।")
+        self.assertEqual(response.json()["lang"], "hi")
+        self.assertEqual(response.json()["emotion"], "calm")
+
+    def test_structured_parser_handles_invalid_field_types(self) -> None:
+        result = main.parse_structured_response(
+            '{"text":"Hello","lang":[],"emotion":"happy"}'
+        )
+
+        self.assertEqual(
+            result,
+            ('{"text":"Hello","lang":[],"emotion":"happy"}', "en", "calm"),
+        )
 
     def test_chat_rejects_empty_and_oversized_messages(self) -> None:
         empty_response = self.client.post("/chat", json={"message": "   "})

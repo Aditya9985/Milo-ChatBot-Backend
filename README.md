@@ -48,6 +48,12 @@ returns `{"status":"ok"}` without authentication or an AI provider call.
 Chat clients may optionally send up to six prior `user`/`assistant` messages
 in `history`, with each content value limited to 300 characters. System
 messages are not accepted from clients.
+Milo and Suzu use separate speech-oriented personas in `main.py`. Voice-mode
+replies have markdown, emoji, and URLs removed and are limited to 18 words at
+a sentence boundary where possible. Requests may set `structured: true` to
+receive `text`, `lang`, and `emotion` fields in addition to the existing
+`response` and `history`; omitting the field preserves the existing response
+shape.
 
 ## Run locally
 
