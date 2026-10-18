@@ -41,6 +41,13 @@ conversation history. `/chat` requires a valid Firebase ID token in the
 Chat uses the asynchronous OpenAI client so provider requests do not block
 FastAPI's event loop. The Flutter app speaks responses with the device's
 native text-to-speech engine; no backend speech-generation request is made.
+Each `/chat` request emits one structured timing log with a request ID,
+companion, voice-mode flag, Firebase verification time, LLM time, and total
+request time. User message text is not included in these logs. `/health`
+returns `{"status":"ok"}` without authentication or an AI provider call.
+Chat clients may optionally send up to six prior `user`/`assistant` messages
+in `history`, with each content value limited to 300 characters. System
+messages are not accepted from clients.
 
 ## Run locally
 
