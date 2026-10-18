@@ -1,16 +1,16 @@
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Literal
+from typing import AsyncGenerator, Literal
 
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientError
-from openai import APIError, OpenAI
+from openai import APIError, AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 load_dotenv()
@@ -31,18 +31,8 @@ CORS_ORIGINS = [
     for origin in os.getenv("CORS_ORIGINS", "*").split(",")
     if origin.strip()
 ]
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 bearer_scheme = HTTPBearer(auto_error=False)
-
-TTS_INSTRUCTIONS = (
-    "Speak as an original youthful male animated companion: warm, soft, bright, "
-    "slightly nasal, and emotionally present, but never a caricature or an "
-    "imitation of any existing character or actor. Use natural conversational "
-    "Indian English and everyday Hindi pronunciation. Keep a consistent voice "
-    "identity, relaxed pacing, clear articulation, gentle rises and falls, and "
-    "short natural pauses. Sound friendly and sincere, with light warmth; avoid "
-    "a robotic, overly formal, deep, or exaggerated delivery."
-)
 
 MILO_SYSTEM_PROMPT = (
     "You are Milo, a friendly and thoughtful AI companion. Be warm, expressive, "
@@ -59,25 +49,17 @@ SUZU_SYSTEM_PROMPT = (
     "Indian English. Do not impersonate existing fictional characters or "
     "claim to be a person."
 )
-SUZU_TTS_INSTRUCTIONS = (
-    "Speak as an original youthful female animated companion: warm, bright, "
-    "gentle, and emotionally present, but never a caricature or an imitation "
-    "of any existing character or actor. Use natural conversational Indian "
-    "English and everyday Hindi pronunciation. Keep a consistent voice "
-    "identity, relaxed pacing, clear articulation, gentle rises and falls, "
-    "and short natural pauses. Sound friendly and sincere; avoid robotic, "
-    "overly formal, or exaggerated delivery."
-)
-COMPANION_SPEECH = {
-    "milo": {"name": "Milo", "voice": "ash", "instructions": TTS_INSTRUCTIONS},
-    "suzu": {
-        "name": "Suzu",
-        "voice": "nova",
-        "instructions": SUZU_TTS_INSTRUCTIONS,
-    },
-}
 
-app = FastAPI(title="Milo ChatBot API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    try:
+        yield
+    finally:
+        await client.close()
+
+
+app = FastAPI(title="Milo ChatBot API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -90,6 +72,7 @@ app.add_middleware(
 class MessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     companion: Literal["milo", "suzu"] = "milo"
+    voice_mode: bool = False
 
     @field_validator("message")
     @classmethod
@@ -98,19 +81,6 @@ class MessageRequest(BaseModel):
         if not message:
             raise ValueError("Message cannot be empty.")
         return message
-
-
-class TTSRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
-    companion: Literal["milo", "suzu"] = "milo"
-
-    @field_validator("text")
-    @classmethod
-    def strip_text(cls, text: str) -> str:
-        text = text.strip()
-        if not text:
-            raise ValueError("Text cannot be empty.")
-        return text
 
 
 class HistoryMessage(BaseModel):
@@ -171,22 +141,23 @@ def require_firebase_user(
     response_model=MessageResponse,
     dependencies=[Depends(require_firebase_user)],
 )
-def chat_endpoint(req: MessageRequest) -> MessageResponse:
+async def chat_endpoint(req: MessageRequest) -> MessageResponse:
+    system_prompt = (
+        SUZU_SYSTEM_PROMPT if req.companion == "suzu" else MILO_SYSTEM_PROMPT
+    )
+    if req.voice_mode:
+        system_prompt += (
+            " This is a live spoken conversation: answer in one brief sentence "
+            "of at most 18 words. Be direct and do not add a preamble."
+        )
     try:
-        completion = client.chat.completions.create(
+        completion = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        SUZU_SYSTEM_PROMPT
-                        if req.companion == "suzu"
-                        else MILO_SYSTEM_PROMPT
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": req.message},
             ],
-            max_completion_tokens=500,
+            max_completion_tokens=120 if req.voice_mode else 500,
         )
     except APIError as error:
         raise HTTPException(
@@ -209,24 +180,6 @@ def chat_endpoint(req: MessageRequest) -> MessageResponse:
             HistoryMessage(role="assistant", content=response.strip(), timestamp=timestamp),
         ],
     )
-
-
-@app.post("/tts", dependencies=[Depends(require_firebase_user)])
-def text_to_speech(req: TTSRequest) -> Response:
-    companion = COMPANION_SPEECH[req.companion]
-    try:
-        speech = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice=companion["voice"],
-            input=req.text,
-            instructions=companion["instructions"],
-        )
-    except APIError as error:
-        raise HTTPException(
-            status_code=502,
-            detail="The AI provider could not generate speech. Please try again.",
-        ) from error
-    return Response(content=speech.content, media_type="audio/mpeg")
 
 
 @app.get("/health")

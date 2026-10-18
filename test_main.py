@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -33,7 +34,10 @@ class ApiTests(unittest.TestCase):
             ]
         )
         with patch.object(
-            main.client.chat.completions, "create", return_value=completion
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
         ) as create:
             response = self.client.post("/chat", json={"message": "  Hi!  "})
 
@@ -45,6 +49,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(response.json()["history"][0]["content"], "Hi!")
         self.assertEqual(len(create.call_args.kwargs["messages"]), 2)
+        self.assertEqual(create.call_args.kwargs["max_completion_tokens"], 500)
 
     def test_suzu_chat_uses_suzu_persona(self) -> None:
         completion = SimpleNamespace(
@@ -55,7 +60,10 @@ class ApiTests(unittest.TestCase):
             ]
         )
         with patch.object(
-            main.client.chat.completions, "create", return_value=completion
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
         ) as create:
             response = self.client.post(
                 "/chat",
@@ -67,6 +75,32 @@ class ApiTests(unittest.TestCase):
             create.call_args.kwargs["messages"][0]["content"],
             main.SUZU_SYSTEM_PROMPT,
         )
+
+    def test_voice_chat_uses_brief_response_instructions(self) -> None:
+        completion = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Hello! What can I help with?")
+                )
+            ]
+        )
+        with patch.object(
+            main.client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ) as create:
+            response = self.client.post(
+                "/chat",
+                json={"message": "Hello", "voice_mode": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "one brief sentence of at most 18 words",
+            create.call_args.kwargs["messages"][0]["content"],
+        )
+        self.assertEqual(create.call_args.kwargs["max_completion_tokens"], 120)
 
     def test_chat_rejects_empty_and_oversized_messages(self) -> None:
         empty_response = self.client.post("/chat", json={"message": "   "})
@@ -149,52 +183,10 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(error.exception.status_code, 401)
 
-    def test_tts_returns_milo_audio(self) -> None:
-        speech = SimpleNamespace(content=b"audio data")
-        with patch.object(
-            main.client.audio.speech, "create", return_value=speech
-        ) as create:
-            response = self.client.post("/tts", json={"text": "Hello"})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["content-type"], "audio/mpeg")
-        self.assertEqual(response.content, b"audio data")
-        create.assert_called_once()
-        self.assertEqual(create.call_args.kwargs["model"], "gpt-4o-mini-tts")
-        self.assertEqual(create.call_args.kwargs["voice"], "ash")
-        self.assertIn("original youthful male", create.call_args.kwargs["instructions"])
-
-    def test_tts_uses_suzu_voice_and_instructions(self) -> None:
-        speech = SimpleNamespace(content=b"suzu audio")
-        with patch.object(
-            main.client.audio.speech, "create", return_value=speech
-        ) as create:
-            response = self.client.post(
-                "/tts",
-                json={"text": "Hello", "companion": "suzu"},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(create.call_args.kwargs["voice"], "nova")
-        self.assertIn(
-            "original youthful female",
-            create.call_args.kwargs["instructions"],
-        )
-
-    def test_tts_rejects_unsupported_companion(self) -> None:
-        response = self.client.post(
-            "/tts",
-            json={"text": "Hello", "companion": "unlisted"},
-        )
-
-        self.assertEqual(response.status_code, 422)
-
-    def test_tts_requires_authentication(self) -> None:
-        main.app.dependency_overrides.clear()
-
+    def test_tts_route_is_removed(self) -> None:
         response = self.client.post("/tts", json={"text": "Hello"})
 
-        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

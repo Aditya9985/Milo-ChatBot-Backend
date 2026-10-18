@@ -35,16 +35,12 @@ Render injects the listening port through `PORT`; the service binds to
 
 The service is stateless and needs no database or persistent disk. Chat
 requests are not retained by this backend; the client stores its own local
-conversation history. Both `/chat` and `/tts` require a valid Firebase ID
-token in the `Authorization: Bearer` header. `/health` remains public.
+conversation history. `/chat` requires a valid Firebase ID token in the
+`Authorization: Bearer` header. `/health` remains public.
 
-Speech uses OpenAI's `gpt-4o-mini-tts` with an original, expressive companion
-voice direction. Speech generation consumes OpenAI API usage and is billed separately from
-Firebase Authentication. The voice is AI-generated and does not imitate an
-existing character or actor.
-Requests may select `milo` or `suzu`: Milo uses the Ash voice and boy
-companion prompt; Suzu uses the Nova voice and girl companion prompt. Unknown
-companion identifiers are rejected by request validation.
+Chat uses the asynchronous OpenAI client so provider requests do not block
+FastAPI's event loop. The Flutter app speaks responses with the device's
+native text-to-speech engine; no backend speech-generation request is made.
 
 ## Run locally
 
