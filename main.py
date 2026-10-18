@@ -151,7 +151,7 @@ def require_firebase_user(
             issuer=FIREBASE_ISSUER,
             options={"require": ["exp", "iat", "auth_time", "iss", "sub"]},
         )
-    except (InvalidTokenError, PyJWKClientError) as error:
+    except (InvalidTokenError, PyJWKClientError, ValueError, TypeError) as error:
         raise HTTPException(
             status_code=401,
             detail="The sign-in session is invalid or expired.",
